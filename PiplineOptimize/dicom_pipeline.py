@@ -315,11 +315,29 @@ class MedicalDicomPipeline:
         with open(os.path.join(self.output_dir, 'class_mapping.json'), 'w') as f:
             json.dump(label2id, f, indent=4)
 
-        # Split
-        strat = df_grouped['label'].apply(lambda x: x[0] if len(x)>0 and x[0] in label2id else "OTHER")
-        tv_df, test_df = train_test_split(df_grouped, test_size=0.2, random_state=42, stratify=strat)
-        strat_remain = tv_df['label'].apply(lambda x: x[0] if len(x)>0 and x[0] in label2id else "OTHER")
-        train_df, val_df = train_test_split(tv_df, test_size=0.125, random_state=42, stratify=strat_remain)
+        # Split (Safe Stratify)
+        def get_stratify_label(x, df_lookup):
+            if not isinstance(x, list) or len(x) == 0: return "OTHER"
+            lbl = x[0]
+            if lbl not in label2id: return "OTHER"
+            count = sum(1 for l in df_lookup['label'] if isinstance(l, list) and len(l) > 0 and l[0] == lbl)
+            if count < 3: return "OTHER"
+            return lbl
+            
+        strat = df_grouped.apply(lambda row: get_stratify_label(row['label'], df_grouped), axis=1)
+        
+        try:
+            tv_df, test_df = train_test_split(df_grouped, test_size=0.2, random_state=42, stratify=strat)
+        except ValueError:
+            self.logger.warning("Data quá ít hoặc mất cân bằng, tự động tắt Stratify cho Test Split.")
+            tv_df, test_df = train_test_split(df_grouped, test_size=0.2, random_state=42)
+            
+        strat_remain = tv_df.apply(lambda row: get_stratify_label(row['label'], tv_df), axis=1)
+        try:
+            train_df, val_df = train_test_split(tv_df, test_size=0.125, random_state=42, stratify=strat_remain)
+        except ValueError:
+            self.logger.warning("Data quá ít hoặc mất cân bằng, tự động tắt Stratify cho Val Split.")
+            train_df, val_df = train_test_split(tv_df, test_size=0.125, random_state=42)
         
         self.logger.info(f"✅ Hoàn tất BƯỚC 4. Train: {len(train_df)}, Val: {len(val_df)}, Test: {len(test_df)}")
         return train_df, val_df, test_df
